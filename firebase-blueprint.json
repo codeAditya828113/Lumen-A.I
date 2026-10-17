@@ -1,0 +1,37 @@
+{
+  "entities": {
+    "Research": {
+      "title": "Research Session",
+      "description": "Stores a complete research session including paper, findings, and metadata.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "topic": { "type": "string" },
+        "summary": { "type": "string" },
+        "findings": { "type": "array" },
+        "paper": { "type": "string" },
+        "citations": { "type": "array" },
+        "visualizations": { "type": "array" },
+        "agentPlan": { "type": "array" },
+        "claims": { "type": "array" },
+        "conflicts": { "type": "array" },
+        "intent": { "type": "object" },
+        "qualityGateAudit": { "type": "object" },
+        "benchmarkNote": { "type": "string" },
+        "evidenceCount": { "type": "number" },
+        "iterationCount": { "type": "number" },
+        "verificationScore": { "type": "number" },
+        "depthLevel": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "topic", "paper", "createdAt"]
+    }
+  },
+  "firestore": {
+    "researches": {
+      "schema": "Research",
+      "description": "Collection of all research sessions"
+    }
+  }
+}

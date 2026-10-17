@@ -1,0 +1,71 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Research Validation
+    function isValidResearch(data) {
+      return data.userId == request.auth.uid &&
+             (!('topic' in data) || (data.topic is string && data.topic.size() <= 10000)) &&
+             (!('summary' in data) || (data.summary is string && data.summary.size() <= 20000)) &&
+             (!('findings' in data) || (data.findings is list && data.findings.size() <= 500)) &&
+             (!('paper' in data) || (data.paper is string && data.paper.size() <= 2000000)) &&
+             (!('citations' in data) || (data.citations is list && data.citations.size() <= 500)) &&
+             (!('visualizations' in data) || (data.visualizations is list && data.visualizations.size() <= 100)) &&
+             (!('conceptModels' in data) || (data.conceptModels is list && data.conceptModels.size() <= 100)) &&
+             (!('citationWeb' in data) || (data.citationWeb is list && data.citationWeb.size() <= 100)) &&
+             (!('agentPlan' in data) || (data.agentPlan is list && data.agentPlan.size() <= 50)) &&
+             (!('claims' in data) || (data.claims is list && data.claims.size() <= 100)) &&
+             (!('conflicts' in data) || (data.conflicts is list && data.conflicts.size() <= 50)) &&
+             (!('intent' in data) || data.intent == null || data.intent is map) &&
+             (!('qualityGateAudit' in data) || data.qualityGateAudit == null || data.qualityGateAudit is map) &&
+             (!('benchmarkNote' in data) || data.benchmarkNote == null || (data.benchmarkNote is string && data.benchmarkNote.size() <= 2000)) &&
+             (!('evidenceCount' in data) || data.evidenceCount is number) &&
+             (!('iterationCount' in data) || data.iterationCount is number) &&
+             (!('verificationScore' in data) || data.verificationScore is number) &&
+             (!('depthLevel' in data) || (data.depthLevel is string && data.depthLevel.size() <= 50)) &&
+             (!('createdAt' in data) || data.createdAt == request.time);
+    }
+
+    match /researches/{researchId} {
+      allow get: if isOwner(existing().userId);
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isSignedIn() && 
+                      isValidId(researchId) && 
+                      isValidResearch(incoming());
+
+      allow update: if isOwner(existing().userId) &&
+                      incoming().userId == existing().userId &&
+                      incoming().createdAt == existing().createdAt &&
+                      incoming().updatedAt == request.time &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['paper', 'summary', 'findings', 'citations', 'visualizations', 'conceptModels', 'citationWeb', 'agentPlan', 'claims', 'conflicts', 'intent', 'qualityGateAudit', 'benchmarkNote', 'evidenceCount', 'iterationCount', 'verificationScore', 'depthLevel', 'updatedAt']);
+
+      allow delete: if isOwner(existing().userId);
+    }
+  }
+}

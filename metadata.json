@@ -1,0 +1,8 @@
+{
+  "name": "Lumen ai improved version ",
+  "description": "A powerful AI research agent that generates structured documents, summarizes multimedia, and visualizes data with a 3D glassmorphism aesthetic.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
