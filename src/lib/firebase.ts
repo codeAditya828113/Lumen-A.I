@@ -1,7 +1,6 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously } from 'firebase/auth';
-import { initializeFirestore } from 'firebase/firestore';
-import defaultFirebaseConfig from '../../firebase-applet-config.json';
+import { initializeFirestore, Firestore } from 'firebase/firestore';
 
 // Helper to sanitize environment variables and ignore placeholders, empty strings or literal undefined/null
 function getEnv(value: unknown): string | undefined {
@@ -23,50 +22,98 @@ function getEnv(value: unknown): string | undefined {
   return cleaned;
 }
 
-// Support overriding via client-side environment variables on your local machine
-const firebaseConfig = {
-  apiKey: getEnv(import.meta.env.VITE_FIREBASE_API_KEY) || defaultFirebaseConfig.apiKey,
-  authDomain: getEnv(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN) || defaultFirebaseConfig.authDomain,
-  projectId: getEnv(import.meta.env.VITE_FIREBASE_PROJECT_ID) || defaultFirebaseConfig.projectId,
-  storageBucket: getEnv(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET) || defaultFirebaseConfig.storageBucket,
-  messagingSenderId: getEnv(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID) || defaultFirebaseConfig.messagingSenderId,
-  appId: getEnv(import.meta.env.VITE_FIREBASE_APP_ID) || defaultFirebaseConfig.appId,
-  measurementId: getEnv(import.meta.env.VITE_FIREBASE_MEASUREMENT_ID) || defaultFirebaseConfig.measurementId,
-  firestoreDatabaseId: getEnv(import.meta.env.VITE_FIREBASE_DATABASE_ID) || defaultFirebaseConfig.firestoreDatabaseId,
+// Read all Firebase settings ONLY from VITE_FIREBASE_* environment variables (no hardcoded fallbacks)
+export const firebaseClientConfig = {
+  apiKey: getEnv(import.meta.env.VITE_FIREBASE_API_KEY),
+  authDomain: getEnv(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN),
+  projectId: getEnv(import.meta.env.VITE_FIREBASE_PROJECT_ID),
+  storageBucket: getEnv(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET),
+  messagingSenderId: getEnv(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID),
+  appId: getEnv(import.meta.env.VITE_FIREBASE_APP_ID),
+  measurementId: getEnv(import.meta.env.VITE_FIREBASE_MEASUREMENT_ID),
+  firestoreDatabaseId: getEnv(import.meta.env.VITE_FIREBASE_DATABASE_ID),
 };
 
-// Log loaded configuration for debugging (obfuscating apiKey)
-console.log('[Firebase] Initializing with Project:', firebaseConfig.projectId, 'Database:', firebaseConfig.firestoreDatabaseId || '(default)');
+// Check for missing required variables
+const requiredClientKeys: (keyof typeof firebaseClientConfig)[] = [
+  'apiKey',
+  'authDomain',
+  'projectId',
+  'appId',
+];
 
-const app = initializeApp(firebaseConfig);
+export const missingFirebaseConfigKeys = requiredClientKeys.filter(
+  (key) => !firebaseClientConfig[key]
+);
 
-const databaseId = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
-  ? firebaseConfig.firestoreDatabaseId
-  : undefined;
+export const firebaseConfigError: string | null =
+  missingFirebaseConfigKeys.length > 0
+    ? `Missing required Firebase environment variables: ${missingFirebaseConfigKeys
+        .map((k) => `VITE_FIREBASE_${k.replace(/([A-Z])/g, '_$1').toUpperCase()}`)
+        .join(', ')}. Please configure them in your .env or .env.local file.`
+    : null;
 
-export const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true,
-}, databaseId);
+if (firebaseConfigError) {
+  console.error(`[Firebase Configuration Error] ${firebaseConfigError}`);
+}
+
+// Initialize Firebase App
+let app: FirebaseApp;
+const existingApps = getApps();
+if (existingApps.length > 0) {
+  app = existingApps[0];
+} else {
+  app = initializeApp({
+    apiKey: firebaseClientConfig.apiKey || 'missing-api-key',
+    authDomain: firebaseClientConfig.authDomain || 'missing-auth-domain',
+    projectId: firebaseClientConfig.projectId || 'missing-project-id',
+    storageBucket: firebaseClientConfig.storageBucket,
+    messagingSenderId: firebaseClientConfig.messagingSenderId,
+    appId: firebaseClientConfig.appId || 'missing-app-id',
+    measurementId: firebaseClientConfig.measurementId,
+  });
+}
+
+const customDatabaseId =
+  firebaseClientConfig.firestoreDatabaseId &&
+  firebaseClientConfig.firestoreDatabaseId !== '(default)'
+    ? firebaseClientConfig.firestoreDatabaseId
+    : undefined;
+
+export const db: Firestore = initializeFirestore(
+  app,
+  {
+    experimentalForceLongPolling: true,
+  },
+  customDatabaseId
+);
 
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
 export const signIn = async () => {
+  if (firebaseConfigError) {
+    throw new Error(firebaseConfigError);
+  }
   try {
     const result = await signInWithPopup(auth, googleProvider);
     return result.user;
   } catch (error) {
-    console.error("Authentication error:", error);
+    console.error('Authentication error:', error);
     throw error;
   }
 };
 
 export const signInAnon = async () => {
+  if (firebaseConfigError) {
+    console.warn(`[Firebase Auth] Cannot sign in anonymously: ${firebaseConfigError}`);
+    return null;
+  }
   try {
     const result = await signInAnonymously(auth);
     return result.user;
   } catch (error) {
-    console.warn("Anonymous authentication error:", error);
+    console.warn('Anonymous authentication error:', error);
     return null;
   }
 };
@@ -88,8 +135,8 @@ export function sanitizeFirestoreData<T>(data: T): T {
   }
   // Check for Firestore FieldValue / Sentinel transforms
   if (
-    typeof (data as any).isEqual === 'function' || 
-    (data as any)._methodName || 
+    typeof (data as any).isEqual === 'function' ||
+    (data as any)._methodName ||
     (data as any).constructor?.name === 'FieldValue' ||
     (data as any).constructor?.name === 'ServerTimestampTransform'
   ) {
@@ -108,4 +155,3 @@ export function sanitizeFirestoreData<T>(data: T): T {
   }
   return clean as any;
 }
-

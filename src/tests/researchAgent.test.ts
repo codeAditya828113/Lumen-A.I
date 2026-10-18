@@ -11,6 +11,8 @@ import {
   FirestoreRateLimitStore,
   researchRateLimiter,
   utilityRateLimiter,
+  dailyResearchRateLimiter,
+  dailyUtilityRateLimiter,
   validateResearchRequest,
   validateSummarizeRequest,
   validatePlagiarismRequest,
@@ -479,10 +481,10 @@ runTest('SlidingWindowRateLimiter enforces request limits', () => {
 });
 
 runTest('sanitizeErrorMessage masks API keys and secrets', () => {
-  const errWithKey = new Error('Failed to query with GEMINI_API_KEY=AIzaSyD-secret-key-12345');
+  const errWithKey = new Error('Failed to query with GEMINI_API_KEY=FAKE_KEY_FOR_TESTS');
   const sanitized = sanitizeErrorMessage(errWithKey);
   assert.strictEqual(sanitized, 'Authentication error occurred while connecting to the AI service.');
-  assert.strictEqual(sanitized.includes('AIzaSyD'), false);
+  assert.strictEqual(sanitized.includes('FAKE_KEY_FOR_TESTS'), false);
 });
 
 runTest('sanitizeErrorMessage formats 429 quota exhaustion gracefully', () => {
@@ -910,9 +912,36 @@ setAiClientForTesting({
 const testServer = http.createServer(app);
 let testBaseUrl = '';
 
+const TEST_VALID_TOKEN = 'test-verified-token-signature-ok';
+const authHeaders = {
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${TEST_VALID_TOKEN}`,
+};
+
+const setupTestTokenVerifier = () => {
+  setTokenVerifierForTesting(async (token) => {
+    if (token === TEST_VALID_TOKEN || token === 'valid-cryptographic-token-signature') {
+      return {
+        uid: 'verified-scholar-777',
+        aud: 'arboreal-matter-507pf',
+        iss: 'https://securetoken.google.com/arboreal-matter-507pf',
+        sub: 'verified-scholar-777',
+        auth_time: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        iat: Math.floor(Date.now() / 1000),
+        firebase: { identities: {}, sign_in_provider: 'google.com' },
+      } as any;
+    }
+    return null;
+  });
+};
+
 const serverInitPromise = new Promise<void>((resolve) => {
   researchRateLimiter.reset();
   utilityRateLimiter.reset();
+  dailyResearchRateLimiter.reset();
+  dailyUtilityRateLimiter.reset();
+  setupTestTokenVerifier();
   testServer.listen(0, '127.0.0.1', () => {
     const addr = testServer.address() as net.AddressInfo;
     testBaseUrl = `http://127.0.0.1:${addr.port}`;
@@ -1012,7 +1041,63 @@ runTest('Cryptographic verification accepts authentic verified Firebase token', 
   assert.strictEqual(result.identifier, 'auth_user:verified-scholar-777');
   assert.strictEqual(result.uid, 'verified-scholar-777');
 
-  resetTokenVerifierForTesting();
+  setupTestTokenVerifier();
+});
+
+runTest('API Route POST /api/research/stream returns 401 when Authorization header is missing', async () => {
+  await serverInitPromise;
+  const res = await fetch(`${testBaseUrl}/api/research/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic: 'No Token Topic' }),
+  });
+  assert.strictEqual(res.status, 401);
+  const data = await res.json();
+  assert.ok(data.error && data.error.includes('Authorization'));
+});
+
+runTest('API Route POST /api/research/stream returns 401 when Authorization token is invalid or forged', async () => {
+  await serverInitPromise;
+  const res = await fetch(`${testBaseUrl}/api/research/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer forged.invalid.token' },
+    body: JSON.stringify({ topic: 'Forged Token Topic' }),
+  });
+  assert.strictEqual(res.status, 401);
+});
+
+runTest('API Route POST /api/summarize returns 401 when Authorization header is missing or invalid', async () => {
+  await serverInitPromise;
+  const resMissing = await fetch(`${testBaseUrl}/api/summarize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: 'https://example.com/test' }),
+  });
+  assert.strictEqual(resMissing.status, 401);
+
+  const resForged = await fetch(`${testBaseUrl}/api/summarize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer fake-bad-token' },
+    body: JSON.stringify({ url: 'https://example.com/test' }),
+  });
+  assert.strictEqual(resForged.status, 401);
+});
+
+runTest('API Route POST /api/plagiarism returns 401 when Authorization header is missing or invalid', async () => {
+  await serverInitPromise;
+  const resMissing = await fetch(`${testBaseUrl}/api/plagiarism`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: 'Some text to check for plagiarism.' }),
+  });
+  assert.strictEqual(resMissing.status, 401);
+
+  const resForged = await fetch(`${testBaseUrl}/api/plagiarism`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer fake-bad-token' },
+    body: JSON.stringify({ text: 'Some text to check for plagiarism.' }),
+  });
+  assert.strictEqual(resForged.status, 401);
 });
 
 runTest('API Route POST /api/research/stream rejects invalid settings schema with HTTP 400', async () => {
@@ -1021,7 +1106,7 @@ runTest('API Route POST /api/research/stream rejects invalid settings schema wit
   // Invalid depth
   const resDepth = await fetch(`${testBaseUrl}/api/research/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders,
     body: JSON.stringify({ topic: 'Silicon technology', settings: { depth: 'ultra-deep' } }),
   });
   assert.strictEqual(resDepth.status, 400);
@@ -1031,7 +1116,7 @@ runTest('API Route POST /api/research/stream rejects invalid settings schema wit
   // Invalid maxIterations (out of bounds hard limits 1 to 10)
   const resIter = await fetch(`${testBaseUrl}/api/research/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders,
     body: JSON.stringify({ topic: 'Silicon technology', settings: { maxIterations: 99 } }),
   });
   assert.strictEqual(resIter.status, 400);
@@ -1041,7 +1126,7 @@ runTest('API Route POST /api/research/stream rejects invalid settings schema wit
   // Invalid sourcePreference
   const resPref = await fetch(`${testBaseUrl}/api/research/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders,
     body: JSON.stringify({ topic: 'Silicon technology', settings: { sourcePreference: 'darkweb' } }),
   });
   assert.strictEqual(resPref.status, 400);
@@ -1051,7 +1136,7 @@ runTest('API Route POST /api/research/stream rejects invalid settings schema wit
   // Non-boolean recentSourcesOnly
   const resRecent = await fetch(`${testBaseUrl}/api/research/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders,
     body: JSON.stringify({ topic: 'Silicon technology', settings: { recentSourcesOnly: 'yes' } }),
   });
   assert.strictEqual(resRecent.status, 400);
@@ -1059,7 +1144,7 @@ runTest('API Route POST /api/research/stream rejects invalid settings schema wit
   // Missing topic
   const resNoTopic = await fetch(`${testBaseUrl}/api/research/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders,
     body: JSON.stringify({ topic: '   ' }),
   });
   assert.strictEqual(resNoTopic.status, 400);
@@ -1071,7 +1156,7 @@ runTest('API Route POST /api/summarize returns summary using mocked Gemini provi
 
   const res = await fetch(`${testBaseUrl}/api/summarize`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders,
     body: JSON.stringify({ url: 'https://example.com/semiconductor-report' }),
   });
 
@@ -1086,7 +1171,7 @@ runTest('API Route POST /api/plagiarism returns analysis using mocked Gemini pro
 
   const res = await fetch(`${testBaseUrl}/api/plagiarism`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders,
     body: JSON.stringify({ text: 'This is a sample academic paper discussing computational neuroscience and philosophy.' }),
   });
 
@@ -1103,7 +1188,7 @@ runTest('Normal SSE completion: streams progress events and finishes with comple
 
   const response = await fetch(`${testBaseUrl}/api/research/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders,
     body: JSON.stringify({
       topic: 'Philosophy of computational functionalism',
       settings: { depth: 'quick', maxIterations: 1, requireQuantitativeData: false },
@@ -1157,7 +1242,7 @@ runTest('Rate limiter returns HTTP 429 when client exceeds request threshold', a
   for (let i = 0; i < 35; i++) {
     const res = await fetch(`${testBaseUrl}/api/plagiarism`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ text: `Test text paragraph validation ${i} with enough length.` }),
     });
 
@@ -1173,6 +1258,63 @@ runTest('Rate limiter returns HTTP 429 when client exceeds request threshold', a
   assert.ok(retryAfterSeconds > 0, 'Expected positive retryAfter value');
 
   await utilityRateLimiter.reset();
+});
+
+runTest('Daily rate limiter returns HTTP 429 when user exceeds daily quota', async () => {
+  await serverInitPromise;
+  await dailyUtilityRateLimiter.reset();
+
+  const mockUid = 'daily-cap-user';
+  setTokenVerifierForTesting(async (token) => {
+    if (token === 'token-daily-cap-test') {
+      return {
+        uid: mockUid,
+        aud: 'arboreal-matter-507pf',
+        iss: 'https://securetoken.google.com/arboreal-matter-507pf',
+        sub: mockUid,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        auth_time: Math.floor(Date.now() / 1000),
+        iat: Math.floor(Date.now() / 1000),
+        firebase: { identities: {}, sign_in_provider: 'anonymous' },
+      } as any;
+    }
+    if (token === TEST_VALID_TOKEN || token === 'valid-cryptographic-token-signature') {
+      return {
+        uid: 'verified-scholar-777',
+        aud: 'arboreal-matter-507pf',
+        iss: 'https://securetoken.google.com/arboreal-matter-507pf',
+        sub: 'verified-scholar-777',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        auth_time: Math.floor(Date.now() / 1000),
+        iat: Math.floor(Date.now() / 1000),
+        firebase: { identities: {}, sign_in_provider: 'google.com' },
+      } as any;
+    }
+    return null;
+  });
+
+  // Exhaust daily quota directly on limiter
+  const clientId = `auth_user:${mockUid}`;
+  for (let i = 0; i < 100; i++) {
+    await dailyUtilityRateLimiter.check(clientId);
+  }
+
+  // Next request must return 429 with daily quota message
+  const res = await fetch(`${testBaseUrl}/api/plagiarism`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer token-daily-cap-test',
+    },
+    body: JSON.stringify({ text: 'Valid test text exceeding daily cap testing threshold.' }),
+  });
+
+  assert.strictEqual(res.status, 429);
+  const data = await res.json();
+  assert.ok(data.error && data.error.includes('Daily'));
+
+  await dailyUtilityRateLimiter.reset();
+  setupTestTokenVerifier();
 });
 
 runTest('Rate limiting across separate store instances verifies isolation and atomic behavior', async () => {
@@ -1249,7 +1391,7 @@ runTest('Client cancellation and disconnection closes SSE research connection gr
 
   const fetchPromise = fetch(`${testBaseUrl}/api/research/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders,
     body: JSON.stringify({
       topic: 'Cancellation Test Inquiry',
       settings: { depth: 'quick', maxIterations: 1 },
@@ -1285,6 +1427,7 @@ runTest('Premature client TCP socket destruction is caught without crashing serv
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${TEST_VALID_TOKEN}`,
         'Content-Length': Buffer.byteLength(postData),
       },
     }, (res) => {

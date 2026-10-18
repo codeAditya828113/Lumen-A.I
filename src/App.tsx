@@ -7,7 +7,7 @@ import {
   ShieldCheck, AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { auth, signIn, signInAnon, sanitizeFirestoreData } from './lib/firebase';
+import { auth, signIn, signInAnon, sanitizeFirestoreData, firebaseConfigError } from './lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { db } from './lib/firebase';
 import { collection, query, where, orderBy, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
@@ -1445,6 +1445,16 @@ export default function App() {
         <div className={cn("flex relative min-h-screen bg-transparent transition-colors duration-500", theme === 'light' ? "text-slate-900" : "text-white/90")}>
           <div className="cyber-glow fixed inset-0 z-0 pointer-events-none"></div>
           <InteractiveBackground activeSection={activeTab} intensity={bgIntensity} colorPalette={bgColorPalette} theme={theme} />
+
+      {/* Missing Firebase Configuration Warning Banner */}
+      {firebaseConfigError && (
+        <div className="fixed top-2 left-4 right-4 z-50 max-w-4xl mx-auto p-3.5 rounded-xl bg-red-950/90 border border-red-500/50 text-red-200 shadow-2xl backdrop-blur-md flex items-center justify-between pointer-events-auto">
+          <div className="flex items-center gap-3 text-xs md:text-sm">
+            <ShieldAlert className="w-5 h-5 text-red-400 shrink-0" />
+            <span>{firebaseConfigError}</span>
+          </div>
+        </div>
+      )}
 
       {/* Top Header */}
       <header className="fixed top-0 left-0 right-0 w-full flex justify-between items-center p-6 z-50 pointer-events-none">

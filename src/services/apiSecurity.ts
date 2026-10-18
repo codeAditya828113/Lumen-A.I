@@ -3,10 +3,11 @@
  * 
  * Enforces:
  * 1. Cryptographic ID-token verification using official Firebase Admin SDK.
- * 2. Trusted proxy IP resolution (req.ip) without trusting spoofed client headers.
- * 3. Genuinely shared atomic rate limiting (FirestoreRateLimitStore) in production multi-replica environments,
+ * 2. Mandatory verified Firebase ID tokens on protected API endpoints.
+ * 3. Daily request caps and burst sliding-window rate limits per user.
+ * 4. Genuinely shared atomic rate limiting (FirestoreRateLimitStore) in production multi-replica environments,
  *    or isolated local store (MemoryRateLimitStore) for single-instance local development and testing.
- * 4. Strict schema validation and volumetric bounds on research parameters.
+ * 5. Strict schema validation and volumetric bounds on research parameters.
  */
 
 import type { Request } from 'express';
@@ -14,7 +15,6 @@ import { getApps, initializeApp, App } from 'firebase-admin/app';
 import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
 import type { AgentSettings } from '../types';
-import defaultFirebaseConfig from '../../firebase-applet-config.json';
 
 // ----------------------------------------------------
 // Firebase Admin SDK Cryptographic Authentication & Firestore
@@ -25,28 +25,32 @@ let testTokenVerifier: ((token: string, checkRevoked?: boolean) => Promise<Decod
 
 /**
  * Initializes or retrieves the Firebase Admin App instance for cryptographic token verification.
+ * Reads configuration strictly from server environment variables with NO hardcoded fallbacks.
  */
 export function getFirebaseAdminApp(): App {
   const apps = getApps();
   if (apps.length > 0) {
     return apps[0]!;
   }
-  const projectId = 
-    process.env.VITE_FIREBASE_PROJECT_ID || 
-    process.env.FIREBASE_PROJECT_ID || 
-    defaultFirebaseConfig.projectId;
+
+  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID;
+  if (!projectId || projectId.trim() === '') {
+    throw new Error(
+      '[Firebase Admin Configuration Error] Missing FIREBASE_PROJECT_ID (or VITE_FIREBASE_PROJECT_ID). Please configure this environment variable.'
+    );
+  }
 
   adminApp = initializeApp({
-    projectId,
+    projectId: projectId.trim(),
   });
   return adminApp;
 }
 
 export function getFirebaseAdminFirestore(): Firestore {
   const app = getFirebaseAdminApp();
-  const dbId = process.env.VITE_FIREBASE_DATABASE_ID || defaultFirebaseConfig.firestoreDatabaseId;
-  if (dbId && dbId !== '(default)') {
-    return getFirestore(app, dbId);
+  const dbId = process.env.FIREBASE_DATABASE_ID || process.env.VITE_FIREBASE_DATABASE_ID;
+  if (dbId && dbId.trim() !== '' && dbId.trim() !== '(default)') {
+    return getFirestore(app, dbId.trim());
   }
   return getFirestore(app);
 }
@@ -101,12 +105,66 @@ export function resetTokenVerifierForTesting(): void {
 }
 
 // ----------------------------------------------------
+// Mandatory Firebase Authentication Middleware Result
+// ----------------------------------------------------
+
+export interface FirebaseAuthResult {
+  authenticated: boolean;
+  uid?: string;
+  decoded?: DecodedIdToken;
+  error?: string;
+}
+
+/**
+ * Validates the Authorization header and cryptographically verifies the Firebase ID token.
+ * Returns 401 error details if missing, malformed, expired, or invalid.
+ */
+export async function requireFirebaseAuth(req: Request, checkRevoked = false): Promise<FirebaseAuthResult> {
+  const authHeader = req.headers?.authorization;
+  if (!authHeader || typeof authHeader !== 'string') {
+    return {
+      authenticated: false,
+      error: 'Missing Authorization header. A valid Firebase ID token is required.',
+    };
+  }
+
+  if (!authHeader.startsWith('Bearer ')) {
+    return {
+      authenticated: false,
+      error: 'Invalid Authorization header format. Format must be "Bearer <firebase_id_token>".',
+    };
+  }
+
+  const token = authHeader.substring(7).trim();
+  if (!token) {
+    return {
+      authenticated: false,
+      error: 'Empty Bearer token provided in Authorization header.',
+    };
+  }
+
+  const decoded = await verifyFirebaseIdToken(token, checkRevoked);
+  if (!decoded || !decoded.uid) {
+    return {
+      authenticated: false,
+      error: 'Invalid, expired, or forged Firebase ID token. Cryptographic verification failed.',
+    };
+  }
+
+  return {
+    authenticated: true,
+    uid: decoded.uid,
+    decoded,
+  };
+}
+
+// ----------------------------------------------------
 // Rate Limiting Store & Algorithms
 // ----------------------------------------------------
 
 export interface RateLimiterOptions {
-  windowMs: number; // e.g., 5 * 60 * 1000 (5 minutes)
-  maxRequests: number; // e.g., 15 for research, 30 for utilities
+  windowMs: number; // e.g., 5 * 60 * 1000 (5 minutes) or 24 * 60 * 60 * 1000 (24 hours)
+  maxRequests: number;
   store?: RateLimitStore;
 }
 
@@ -314,7 +372,11 @@ export function resolveDefaultRateLimitStore(collectionName = '_rate_limits'): R
   return new MemoryRateLimitStore();
 }
 
-// Global rate limiters (auto-configured for Firestore in multi-instance production, Memory for local/tests)
+// ----------------------------------------------------
+// Global Rate Limiters & Daily Caps
+// ----------------------------------------------------
+
+// Per-user burst rate limits (5-minute sliding window)
 export const researchRateLimiter = new SlidingWindowRateLimiter({
   windowMs: 5 * 60 * 1000, // 5 minutes
   maxRequests: 15,
@@ -325,6 +387,19 @@ export const utilityRateLimiter = new SlidingWindowRateLimiter({
   windowMs: 5 * 60 * 1000,
   maxRequests: 30,
   store: resolveDefaultRateLimitStore('_rate_limits_utility'),
+});
+
+// Per-user daily request caps (24-hour sliding window)
+export const dailyResearchRateLimiter = new SlidingWindowRateLimiter({
+  windowMs: 24 * 60 * 60 * 1000, // 24 hours
+  maxRequests: 50, // 50 research requests per day
+  store: resolveDefaultRateLimitStore('_rate_limits_daily_research'),
+});
+
+export const dailyUtilityRateLimiter = new SlidingWindowRateLimiter({
+  windowMs: 24 * 60 * 60 * 1000, // 24 hours
+  maxRequests: 100, // 100 utility requests per day
+  store: resolveDefaultRateLimitStore('_rate_limits_daily_utility'),
 });
 
 // ----------------------------------------------------
@@ -364,7 +439,6 @@ export async function resolveClientIdentifier(req: Request, checkRevoked = false
         };
       }
       // If cryptographic verification fails, we do NOT trust the token or any decoded claims.
-      // Fall through strictly to verified IP.
     }
   }
 

@@ -10,6 +10,10 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+if (process.env.npm_lifecycle_event === 'start' && !process.env.NODE_ENV) {
+  process.env.NODE_ENV = 'production';
+}
+
 const isRunningWithTsx = 
   process.execArgv.some(arg => arg.includes('tsx')) || 
   process.env.__TSX_BOOTSTRAPPED__ === '1';

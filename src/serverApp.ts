@@ -8,7 +8,9 @@ import { jsonrepair } from 'jsonrepair';
 import {
   researchRateLimiter,
   utilityRateLimiter,
-  resolveClientIdentifier,
+  dailyResearchRateLimiter,
+  dailyUtilityRateLimiter,
+  requireFirebaseAuth,
   validateResearchRequest,
   validateSummarizeRequest,
   validatePlagiarismRequest,
@@ -47,16 +49,24 @@ app.get('/api/health', (_req, res) => {
 
 // SSE Streaming Research Agent Endpoint
 app.post('/api/research/stream', async (req, res) => {
-  // 1. Request Body & Full Settings Schema Validation
+  // 1. Mandatory Cryptographic Firebase ID Token Verification
+  const authResult = await requireFirebaseAuth(req);
+  if (!authResult.authenticated || !authResult.uid) {
+    res.status(401).json({
+      error: authResult.error || 'Unauthorized: Valid Firebase ID token is required.',
+    });
+    return;
+  }
+  const clientId = `auth_user:${authResult.uid}`;
+
+  // 2. Request Body & Full Settings Schema Validation
   const validation = validateResearchRequest(req.body);
   if (!validation.valid || !validation.sanitized) {
     res.status(400).json({ error: validation.error || 'Invalid research request parameters.' });
     return;
   }
 
-  // 2. Cryptographic Identity & Rate Limiting Check
-  const clientInfo = await resolveClientIdentifier(req);
-  const clientId = clientInfo.identifier;
+  // 3. Per-User Burst Rate Limiting Check (5-minute sliding window)
   const rateLimit = await researchRateLimiter.check(clientId);
   if (!rateLimit.allowed) {
     res.status(429).json({
@@ -66,9 +76,19 @@ app.post('/api/research/stream', async (req, res) => {
     return;
   }
 
+  // 4. Per-User Daily Request Cap Check (24-hour sliding window)
+  const dailyLimit = await dailyResearchRateLimiter.check(clientId);
+  if (!dailyLimit.allowed) {
+    res.status(429).json({
+      error: 'Daily research quota exceeded for this account. Please try again tomorrow.',
+      retryAfter: dailyLimit.resetSeconds,
+    });
+    return;
+  }
+
   const { topic, feedback, detailLevel, analyticalLens, settings, userClarification } = validation.sanitized;
 
-  // 3. Setup SSE Stream Headers
+  // 5. Setup SSE Stream Headers
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -144,21 +164,39 @@ app.post('/api/research/stream', async (req, res) => {
 
 // Media / URL Summarization Endpoint
 app.post('/api/summarize', async (req, res) => {
-  // 1. Request Body Validation
+  // 1. Mandatory Cryptographic Firebase ID Token Verification
+  const authResult = await requireFirebaseAuth(req);
+  if (!authResult.authenticated || !authResult.uid) {
+    res.status(401).json({
+      error: authResult.error || 'Unauthorized: Valid Firebase ID token is required.',
+    });
+    return;
+  }
+  const clientId = `auth_user:${authResult.uid}`;
+
+  // 2. Request Body Validation
   const validation = validateSummarizeRequest(req.body);
   if (!validation.valid || !validation.sanitized) {
     res.status(400).json({ error: validation.error || 'Invalid URL provided.' });
     return;
   }
 
-  // 2. Cryptographic Identity & Rate Limiting Check
-  const clientInfo = await resolveClientIdentifier(req);
-  const clientId = clientInfo.identifier;
+  // 3. Per-User Burst Rate Limiting Check (5-minute sliding window)
   const rateLimit = await utilityRateLimiter.check(clientId);
   if (!rateLimit.allowed) {
     res.status(429).json({
       error: 'Rate limit exceeded for summarization requests. Please try again later.',
       retryAfter: rateLimit.resetSeconds,
+    });
+    return;
+  }
+
+  // 4. Per-User Daily Request Cap Check (24-hour sliding window)
+  const dailyLimit = await dailyUtilityRateLimiter.check(clientId);
+  if (!dailyLimit.allowed) {
+    res.status(429).json({
+      error: 'Daily utility quota exceeded for this account. Please try again tomorrow.',
+      retryAfter: dailyLimit.resetSeconds,
     });
     return;
   }
@@ -187,21 +225,39 @@ app.post('/api/summarize', async (req, res) => {
 
 // Plagiarism & AI Generation Check Endpoint
 app.post('/api/plagiarism', async (req, res) => {
-  // 1. Request Body Validation
+  // 1. Mandatory Cryptographic Firebase ID Token Verification
+  const authResult = await requireFirebaseAuth(req);
+  if (!authResult.authenticated || !authResult.uid) {
+    res.status(401).json({
+      error: authResult.error || 'Unauthorized: Valid Firebase ID token is required.',
+    });
+    return;
+  }
+  const clientId = `auth_user:${authResult.uid}`;
+
+  // 2. Request Body Validation
   const validation = validatePlagiarismRequest(req.body);
   if (!validation.valid || !validation.sanitized) {
     res.status(400).json({ error: validation.error || 'Invalid plagiarism payload.' });
     return;
   }
 
-  // 2. Cryptographic Identity & Rate Limiting Check
-  const clientInfo = await resolveClientIdentifier(req);
-  const clientId = clientInfo.identifier;
+  // 3. Per-User Burst Rate Limiting Check (5-minute sliding window)
   const rateLimit = await utilityRateLimiter.check(clientId);
   if (!rateLimit.allowed) {
     res.status(429).json({
       error: 'Rate limit exceeded for plagiarism verification. Please try again later.',
       retryAfter: rateLimit.resetSeconds,
+    });
+    return;
+  }
+
+  // 4. Per-User Daily Request Cap Check (24-hour sliding window)
+  const dailyLimit = await dailyUtilityRateLimiter.check(clientId);
+  if (!dailyLimit.allowed) {
+    res.status(429).json({
+      error: 'Daily utility quota exceeded for this account. Please try again tomorrow.',
+      retryAfter: dailyLimit.resetSeconds,
     });
     return;
   }
@@ -273,7 +329,7 @@ export async function startServer() {
 
   return new Promise<void>((resolve) => {
     app.listen(PORT, '0.0.0.0', () => {
-      console.log(`InsightStream server active on http://0.0.0.0:${PORT} (${isProd ? 'production' : 'development'})`);
+      console.log(`Lumen AI server active on http://0.0.0.0:${PORT} (${isProd ? 'production' : 'development'})`);
       resolve();
     });
   });
