@@ -2563,6 +2563,20 @@ export default function App() {
            </>
            )}
          </div>
+
+         {/* App Footer */}
+         <footer className="w-full py-8 mt-12 border-t border-slate-200/60 dark:border-white/5 text-center flex items-center justify-center gap-1.5 text-xs font-mono text-slate-500 dark:text-slate-400 select-none">
+           <span>Built by</span>
+           <a
+             href="https://github.com/codeAditya828113/Lumen-A.I"
+             target="_blank"
+             rel="noopener noreferrer"
+             className="text-cyan-600 dark:text-cyan-400 font-semibold hover:underline inline-flex items-center gap-1 transition-colors cursor-pointer"
+           >
+             Aditya Kumar
+             <ExternalLink className="w-3 h-3 inline-block" />
+           </a>
+         </footer>
        </main>
 
        {/* Floating Workspace Drawer Trigger */}

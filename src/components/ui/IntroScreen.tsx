@@ -797,6 +797,17 @@ export const IntroScreen = ({ onStart, theme = 'dark' }: { onStart: () => void; 
               <Sparkles className="w-4 h-4 text-cyan-400 group-hover:animate-pulse relative z-10" />
               <span className="font-display font-bold uppercase tracking-[0.15em] text-xs relative z-10">Launch Lumen AI</span>
             </button>
+
+            <div className="mt-8 text-center">
+              <a
+                href="https://github.com/codeAditya828113/Lumen-A.I"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] font-mono text-slate-500 hover:text-cyan-400 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                Built by <span className="font-semibold text-slate-400 hover:text-cyan-300">Aditya Kumar</span>
+              </a>
+            </div>
           </div>
         </section>
         

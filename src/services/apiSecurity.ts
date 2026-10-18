@@ -363,6 +363,10 @@ export class SlidingWindowRateLimiter {
  * - Local Development & Automated Tests: MemoryRateLimitStore for zero-dependency local speed.
  */
 export function resolveDefaultRateLimitStore(collectionName = '_rate_limits'): RateLimitStore {
+  if (process.env.INSIGHTSTREAM_TEST_MODE || process.env.NODE_ENV === 'test' || process.env.VITEST) {
+    return new MemoryRateLimitStore();
+  }
+
   const isProd = process.env.NODE_ENV === 'production';
   const configuredStore = process.env.RATE_LIMIT_STORE; // 'firestore' | 'memory'
 

@@ -159,3 +159,10 @@ npm run lint
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+
+## Credits & Attribution
+
+Lumen AI was created by Aditya Kumar (GitHub: [codeAditya828113](https://github.com/codeAditya828113)). If you use or build on this project, please keep the copyright notice in LICENSE and credit the original author and link back to this repository.
+

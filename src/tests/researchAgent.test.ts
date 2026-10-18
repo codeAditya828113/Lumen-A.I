@@ -1,3 +1,7 @@
+process.env.NODE_ENV = 'test';
+process.env.INSIGHTSTREAM_TEST_MODE = '1';
+process.env.RATE_LIMIT_STORE = 'memory';
+
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
@@ -937,6 +941,10 @@ const setupTestTokenVerifier = () => {
 };
 
 const serverInitPromise = new Promise<void>((resolve) => {
+  researchRateLimiter.setStore(new MemoryRateLimitStore());
+  utilityRateLimiter.setStore(new MemoryRateLimitStore());
+  dailyResearchRateLimiter.setStore(new MemoryRateLimitStore());
+  dailyUtilityRateLimiter.setStore(new MemoryRateLimitStore());
   researchRateLimiter.reset();
   utilityRateLimiter.reset();
   dailyResearchRateLimiter.reset();
